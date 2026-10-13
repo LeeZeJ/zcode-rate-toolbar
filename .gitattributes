@@ -1,0 +1,5 @@
+*.cmd text eol=crlf
+*.cjs text
+*.js text
+*.json text
+*.md text

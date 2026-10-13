@@ -28,14 +28,14 @@ function readCfg() {
     min_interval_ms: 900,
     heartbeat_ms: 15000,
     hot_reload: true,
-    show: { ttft: true, tps: true, e2e: true },
-    pos: "left",
+    show: { ttft: true, tps: true, e2e: true, cache: false, in: false, out: false },
+    pos: "right",
   };
   try {
     const user = JSON.parse(fs.readFileSync(CONFIG, "utf8"));
     Object.assign(c, user);
-    c.show = Object.assign({ ttft: true, tps: true, e2e: true }, user.show || {});
-    if (c.pos !== "right") c.pos = "left";
+    c.show = Object.assign({ ttft: true, tps: true, e2e: true, cache: false, in: false, out: false }, user.show || {});
+    c.pos = c.pos === "left" ? "left" : "right";
   } catch (e) {}
   return c;
 }

@@ -1,13 +1,14 @@
 /* overlay.js — ZCode 速率工具栏渲染端（v2，自包含 IIFE）。
- * 位置（config.json pos）：
+ * 位置（config.json pos，默认 right）：
  *   left  —— 追加到 [data-composer-leading-actions] 末尾，
- *            即「完全访问」模式簇右侧（默认，与 Codex 参考布局一致）；
+ *            即「完全访问」模式簇右侧；
  *   right —— 插到 [data-composer-trailing-actions] 最前，
- *            即「用量/模型选择」簇左侧。
- * 显示项（config.json show）：首字(TTFT) / token/s / E2E(总耗时) 各自可开关，
- *   三项之间用中点 · 分隔；配置经主进程推送热生效（改 config.json 即可，无需重启）。
+ *            即「用量/模型选择」簇左侧（默认）。
+ * 显示项（config.json show，默认只开前三项）：首字(TTFT) / token/s / E2E(总耗时)
+ *   / 缓存命中率 / 本轮输入 token / 本轮输出 token，逐项开关；
+ *   项与项之间用中点 · 分隔；配置经主进程推送热生效（改 config.json 即可，无需重启）。
  * 数据：主进程 loader 经 window.__rateUpdate 推送（db.sqlite 只读快照）；
- *       E2E 只显示最近一个已完成回合的权威值（turn_usage.duration_ms），
+ *       E2E / 缓存 / 入 / 出 只显示最近一个已完成回合的权威值（turn_usage），
  *       不实时跳动——新一轮回答完整落库后才更新。
  * 主题：颜色引用客户端 CSS 变量（--color-foreground*），深浅主题自动跟随。
  * 响应式：元素带 data-composer-collapse-priority=4，参与客户端自己的
@@ -31,7 +32,8 @@
   var data = null; // 最近一次推送 {ts, sessions:{...}, mine?, cfg?}
   var perComposer = new WeakMap(); // leading-actions el -> {node, sid, cfgKey}
 
-  var CFG = { show: { ttft: true, tps: true, e2e: true }, pos: "left" };
+  /* 默认只开 ttft/tps/e2e；cache/in/out 显式开启才显示（老配置无这些键 → 关）。 */
+  var CFG = { show: { ttft: true, tps: true, e2e: true, cache: false, in: false, out: false }, pos: "right" };
   function cfgKey() {
     return JSON.stringify(CFG);
   }
@@ -42,8 +44,11 @@
         ttft: !(c.show && c.show.ttft === false),
         tps: !(c.show && c.show.tps === false),
         e2e: !(c.show && c.show.e2e === false),
+        cache: !!(c.show && c.show.cache),
+        in: !!(c.show && c.show.in),
+        out: !!(c.show && c.show.out),
       },
-      pos: c.pos === "right" ? "right" : "left",
+      pos: c.pos === "left" ? "left" : "right",
     };
   }
 
@@ -79,6 +84,16 @@
     if (t == null || !Number.isFinite(t) || t <= 0) return null;
     return (Math.round(t * 10) / 10).toFixed(1);
   }
+  function fmtTok(n) {
+    if (n == null || !Number.isFinite(n) || n < 0) return null;
+    if (n < 1000) return String(Math.round(n));
+    if (n < 1000000) return (Math.round(n / 100) / 10).toFixed(1) + "k";
+    return (Math.round(n / 10000) / 100).toFixed(2) + "M";
+  }
+  function fmtPct(p) {
+    if (p == null || !Number.isFinite(p) || p < 0) return null;
+    return Math.round(p) + "%";
+  }
 
   /* ---------- DOM ---------- */
   var CSS_INJECTED = false;
@@ -109,6 +124,9 @@
     if (CFG.show.ttft) html.push('<span class="rt-ttft">首字 <span class="rt-v">–</span></span>');
     if (CFG.show.tps) html.push('<span class="rt-tps"><span class="rt-v">–</span> tok/s</span>');
     if (CFG.show.e2e) html.push('<span class="rt-e2e">E2E <span class="rt-v">–</span></span>');
+    if (CFG.show.cache) html.push('<span class="rt-cache">缓存 <span class="rt-v">–</span></span>');
+    if (CFG.show.in) html.push('<span class="rt-in">入 <span class="rt-v">–</span></span>');
+    if (CFG.show.out) html.push('<span class="rt-out">出 <span class="rt-v">–</span></span>');
     root.innerHTML = html.join('<span class="rt-sep">·</span>');
     return root;
   }
@@ -133,13 +151,22 @@
       snap && snap.turn && Number.isFinite(snap.turn.durationMs) && snap.turn.durationMs > 0
         ? snap.turn.durationMs
         : null;
+    var cachePct = snap && snap.turn ? snap.turn.cacheHitPct : null;
+    var inTok = snap && snap.turn ? snap.turn.inputTokens : null;
+    var outTok = snap && snap.turn ? snap.turn.outputTokens : null;
 
     var ttftEl = st.node.querySelector(".rt-ttft .rt-v");
     var tpsEl = st.node.querySelector(".rt-tps .rt-v");
     var e2eEl = st.node.querySelector(".rt-e2e .rt-v");
+    var cacheEl = st.node.querySelector(".rt-cache .rt-v");
+    var inEl = st.node.querySelector(".rt-in .rt-v");
+    var outEl = st.node.querySelector(".rt-out .rt-v");
     if (ttftEl) ttftEl.textContent = fmtMs(ttft) || "–";
     if (tpsEl) tpsEl.textContent = fmtTps(tps) || "–";
     if (e2eEl) e2eEl.textContent = fmtMs(e2eMs) || "–";
+    if (cacheEl) cacheEl.textContent = fmtPct(cachePct) || "–";
+    if (inEl) inEl.textContent = fmtTok(inTok) || "–";
+    if (outEl) outEl.textContent = fmtTok(outTok) || "–";
 
     var tip = [];
     if (snap && snap.last) {
@@ -157,6 +184,11 @@
       );
       tip.push(
         "本轮 token：输入 " + (snap.turn.inputTokens || 0) + " / 输出 " + (snap.turn.outputTokens || 0),
+      );
+      tip.push(
+        "本轮缓存：命中 " + fmtTok(snap.turn.cacheReadTokens || 0) + "，写入 " +
+          fmtTok(snap.turn.cacheCreationTokens || 0) +
+          (snap.turn.cacheHitPct != null ? "，命中率 " + snap.turn.cacheHitPct + "%" : ""),
       );
     }
     tip.push(running ? "回合进行中…" : "空闲");

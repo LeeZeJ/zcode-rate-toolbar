@@ -4,10 +4,13 @@
  *     time_to_first_token_ms（首字）、duration_ms、output_tokens、
  *     first_token_at / completed_at（用于生成段耗时 = 完成减首字）。
  *   turn_usage   —— 每轮对话一行（完成时落库）：duration_ms（E2E 权威值）、
- *     time_to_first_token_ms、model_request_count 等。
+ *     time_to_first_token_ms、model_request_count、input/output_tokens、
+ *     cache_creation_input_tokens / cache_read_input_tokens（缓存命中率）。
  * 口径与开源 zcode-token-usage-statusbar 项目一致：
  *   token/s = output_tokens ÷ 生成段耗时（首 token 之后到完成；缺 first_token_at
- *   时退化为整请求 duration_ms，与上游 calculateOutputTps 相同）。 */
+ *   时退化为整请求 duration_ms，与上游 calculateOutputTps 相同）。
+ * 缓存命中率 = cache_read ÷ (cache_read + cache_creation + input)，
+ *   即「本轮全部输入 token 里命中缓存的比例」，回合完成时随 turn_usage 落库更新。 */
 "use strict";
 const os = require("os");
 const path = require("path");
@@ -43,6 +46,17 @@ function tpsOf(row) {
   return Number.isFinite(t) ? Math.round(t * 10) / 10 : null;
 }
 
+/* 回文缓存命中率（%）：cache_read ÷ 全部输入 token；无数据返回 null。 */
+function cacheHitPctOf(turn) {
+  if (!turn) return null;
+  const read = turn.cache_read_input_tokens || 0;
+  const created = turn.cache_creation_input_tokens || 0;
+  const plain = turn.input_tokens || 0;
+  const denom = read + created + plain;
+  if (denom <= 0) return null;
+  return Math.round((read * 100) / denom);
+}
+
 /* 查询一批会话；返回 { ts, sessions: { sid: snapshot } }。
  * snapshot.turn —— 最近一轮（任意状态，完成时才有行）
  * snapshot.last —— 最近一次已完成的主链路模型请求（query_source='main_turn'，
@@ -51,7 +65,8 @@ function querySessions(db, sids) {
   const turnStmt = db.prepare(
     "select turn_id, status, started_at, first_model_start_at, first_token_at, completed_at," +
       " duration_ms, time_to_first_token_ms, model_request_count, tool_call_count," +
-      " input_tokens, output_tokens from turn_usage where session_id=? order by started_at desc limit 1",
+      " input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens" +
+      " from turn_usage where session_id=? order by started_at desc limit 1",
   );
   const lastStmt = db.prepare(
     "select model_id, status, started_at, first_token_at, completed_at, duration_ms," +
@@ -83,6 +98,9 @@ function querySessions(db, sids) {
             tools: turn.tool_call_count,
             inputTokens: turn.input_tokens,
             outputTokens: turn.output_tokens,
+            cacheHitPct: cacheHitPctOf(turn),
+            cacheReadTokens: turn.cache_read_input_tokens || 0,
+            cacheCreationTokens: turn.cache_creation_input_tokens || 0,
           }
         : null,
       last: last

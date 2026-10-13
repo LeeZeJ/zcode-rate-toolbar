@@ -2,6 +2,6 @@
   "min_interval_ms": 900,
   "heartbeat_ms": 15000,
   "hot_reload": true,
-  "show": { "ttft": true, "tps": true, "e2e": true },
-  "pos": "left"
+  "show": { "ttft": true, "tps": true, "e2e": true, "cache": false, "in": false, "out": false },
+  "pos": "right"
 }
